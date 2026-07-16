@@ -1,0 +1,67 @@
+# Publish ghcr.io/savantenvs/base.
+#
+# Two modes (workflow_dispatch input `mode`):
+#   - mirror (default): pull an existing public base image (source) and re-push it
+#     under ghcr.io/savantenvs/base:<tag> + :latest. Used for the one-time move of
+#     the fleet base from ghcr.io/mayhemheroes/base.
+#   - build: build ./Dockerfile from scratch and push :<tag> (UTC date) + :latest.
+#
+# The package is created by GITHUB_TOKEN from this public repo, so it is publicly
+# pullable — required: every fork's mayhem/Dockerfile does FROM ghcr.io/savantenvs/base
+# and the Mayhem cluster pulls the resulting commit images anonymously.
+name: Publish base image
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'mirror (re-push source image) or build (docker build ./Dockerfile)'
+        type: choice
+        options: [mirror, build]
+        default: mirror
+      source:
+        description: 'mirror mode: image to mirror'
+        type: string
+        default: 'ghcr.io/mayhemheroes/base:20260621'
+      tag:
+        description: 'immutable tag to publish (YYYYMMDD; keep the source date when mirroring)'
+        type: string
+        default: '20260621'
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    env:
+      IMAGE: ghcr.io/savantenvs/base
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Mirror ${{ inputs.source }}
+        if: inputs.mode == 'mirror'
+        run: |
+          docker pull "${{ inputs.source }}"
+          docker tag "${{ inputs.source }}" "$IMAGE:${{ inputs.tag }}"
+          docker tag "${{ inputs.source }}" "$IMAGE:latest"
+
+      - name: Build ./Dockerfile
+        if: inputs.mode == 'build'
+        run: |
+          DOCKER_BUILDKIT=1 docker build \
+            --build-arg "BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            -t "$IMAGE:${{ inputs.tag }}" -t "$IMAGE:latest" .
+
+      - name: Push
+        run: |
+          docker push "$IMAGE:${{ inputs.tag }}"
+          docker push "$IMAGE:latest"
+          docker inspect --format '{{index .RepoDigests 0}}' "$IMAGE:${{ inputs.tag }}" || true
