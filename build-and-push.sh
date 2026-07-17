@@ -3,10 +3,10 @@
 # Build and push the mayhem C/C++ base image (./Dockerfile) to a registry.
 #
 # Default target is the GitHub Container Registry package ghcr.io/savantenvs/base.
-# This repo lives in the forallsecure org, but a GHCR package's owner is set by the
-# IMAGE namespace (ghcr.io/<owner>/...), NOT by the source repo — so we publish to the
-# savantenvs org regardless. Requires a token with `write:packages` on savantenvs:
+# Local/manual publishing requires a CLASSIC PAT with `write:packages` on savantenvs
+# (fine-grained PATs can't push to ghcr):
 #   echo "$GHCR_TOKEN" | docker login ghcr.io -u <github-user> --password-stdin
+# CI publishing: use the Publish workflow in this repo instead (Actions GITHUB_TOKEN).
 #
 # We mint a NEW fixed base periodically (not per build): the tag is the UTC DATE
 # (YYYYMMDD), e.g. ghcr.io/savantenvs/base:20260621. All integrations minted against
