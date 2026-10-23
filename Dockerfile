@@ -16,6 +16,29 @@
 #   ./build-and-push.sh                     # → ghcr.io/savantenvs/base:<YYYYMMDD> + :latest
 #   IMAGE=ghcr.io/myorg/base ./build-and-push.sh
 
+# --- ccache builder ----------------------------------------------------------------------
+# Static ccache 4.11.3 for the OPTIONAL compile-cache pre-fill (SPEC §6.2 item 18). The version
+# is part of the stamp rlenv validates, so bump it only together with rlenv. Alpine/musl gives a
+# fully static binary; the final image copies just that binary.
+# alpine:3.21 (manifest-list digest; re-verify with `docker buildx imagetools inspect alpine:3.21`)
+FROM alpine:3.21@sha256:ce64758a109eb420d874a118f87920e625e12d3634e03b4a5573fd9f6e5d3507 AS ccache-builder
+ARG CCACHE_VERSION=4.11.3
+ARG CCACHE_SHA256=d5a340e199977b7b1e89c0add794132c977fdc2ecc7ca5451e03d43627a1b1be
+RUN apk add --no-cache build-base cmake ninja perl wget tar xz linux-headers zstd-dev zstd-static file
+RUN wget -q -O /tmp/ccache.tar.xz \
+      "https://github.com/ccache/ccache/releases/download/v${CCACHE_VERSION}/ccache-${CCACHE_VERSION}.tar.xz" \
+ && echo "${CCACHE_SHA256}  /tmp/ccache.tar.xz" | sha256sum -c - \
+ && tar -C /tmp -xf /tmp/ccache.tar.xz \
+ && cmake -S "/tmp/ccache-${CCACHE_VERSION}" -B /tmp/build -G Ninja \
+      -DCMAKE_BUILD_TYPE=Release -DSTATIC_LINK=ON -DENABLE_TESTING=OFF \
+      -DREDIS_STORAGE_BACKEND=OFF -DHTTP_STORAGE_BACKEND=OFF -DENABLE_DOCUMENTATION=OFF \
+      -DCMAKE_EXE_LINKER_FLAGS=-static -DCMAKE_POSITION_INDEPENDENT_CODE=OFF \
+ && cmake --build /tmp/build \
+ && strip /tmp/build/ccache \
+ && install -D /tmp/build/ccache /out/ccache \
+ && file /out/ccache | grep -q 'statically linked' \
+ && /out/ccache --version | head -1 | grep -qx "ccache version ${CCACHE_VERSION}"
+
 # Base OS pinned by digest (debian stable / trixie). Bump deliberately.
 # Manifest-list digest for debian:trixie as of 2026-05-20 — VERIFY before building with:
 #   docker buildx imagetools inspect debian:trixie
@@ -99,6 +122,20 @@ RUN groupadd -g 10000 sandbox && useradd -u 10000 -g 10000 -M -s /usr/sbin/nolog
  && groupadd -g 2000  mayhem  && useradd -u 2000  -g 2000  -m -s /bin/bash       mayhem \
  && mkdir -p /mayhem \
  && chown -R 2000:2000 /mayhem
+
+# Optional compile-cache pre-fill (SPEC §6.2 item 18). ccache lives OFF the default PATH: a commit
+# image opts in by wrapping ONLY its build step in `/opt/mayhem/ccache/prefill <cmd…>`. The helper is
+# the single source of truth for the pinned settings and the stamp rlenv validates at setup.
+COPY --from=ccache-builder /out/ccache /opt/mayhem/ccache/ccache
+COPY --chmod=755 ccache-prefill.sh /opt/mayhem/ccache/prefill
+# The masquerade dir is persistent and root-owned: CMake records the resolved compiler path in
+# CMakeCache.txt, so it must still exist when the grader rebuilds (SPEC §6.2 item 18). It is NOT on
+# PATH; only the helper prepends it. Only compilers present here are wrapped; afl-*/hfuzz-* never.
+RUN mkdir -p /opt/mayhem/ccache/bin \
+ && for n in cc c++ gcc g++ clang clang++ clang-19 clang++-19 gcc-14 g++-14; do \
+      if command -v "$n" >/dev/null 2>&1; then ln -s /opt/mayhem/ccache/ccache "/opt/mayhem/ccache/bin/$n"; fi; \
+    done \
+ && mkdir -p /opt/toolchains/ccache && chown 2000:2000 /opt/toolchains/ccache && chmod 0700 /opt/toolchains/ccache
 
 # Provenance — record EXACTLY when this base was built. Docker's own image `.Created`
 # field is (a) not a label and (b) overwritten to SOURCE_DATE_EPOCH on a time-travel
