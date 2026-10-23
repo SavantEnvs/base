@@ -4,6 +4,11 @@
 # (YYYYMMDD) and integrations pin it in their mayhem/Dockerfile FROM line, so they share
 # base layers. :latest tracks the newest mint.
 #
+# The tag is multi-arch (linux/amd64 + linux/arm64): each platform builds natively on its own
+# runner and is pushed by digest (untagged), then one job checks the amd64 image and only then
+# writes the tag's index. Mayhem and the rlenv grader run amd64; arm64 is for fast local builds on
+# arm64 hosts. A commit image bound for Mayhem must still be built with --platform linux/amd64.
+#
 # The package must be PUBLICLY pullable: every fork's mayhem/Dockerfile is
 # `FROM ghcr.io/savantenvs/base:<tag>` and builds in that fork's Actions with its own
 # GITHUB_TOKEN (no cross-repo package access). Package visibility is a one-time UI
@@ -18,16 +23,42 @@ on:
         type: string
         default: ''
 
+env:
+  IMAGE: ghcr.io/savantenvs/base
+
 jobs:
-  publish:
+  prep:
     runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.meta.outputs.tag }}
+      build_date: ${{ steps.meta.outputs.build_date }}
+    steps:
+      - name: Resolve tag and build date (shared by every platform)
+        id: meta
+        run: |
+          TAG="${{ inputs.tag }}"; TAG="${TAG:-$(date -u +%Y%m%d)}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "build_date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: prep
+    strategy:
+      matrix:
+        include:
+          - platform: linux/amd64
+            arch: amd64
+            runner: ubuntu-latest
+          - platform: linux/arm64
+            arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
       packages: write
-    env:
-      IMAGE: ghcr.io/savantenvs/base
     steps:
       - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
 
       - name: Log in to ghcr.io
         uses: docker/login-action@v3
@@ -36,16 +67,54 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build ./Dockerfile
+      - name: Build ./Dockerfile and push by digest (${{ matrix.platform }})
         run: |
-          TAG="${{ inputs.tag }}"; TAG="${TAG:-$(date -u +%Y%m%d)}"
-          echo "TAG=$TAG" >> "$GITHUB_ENV"
-          DOCKER_BUILDKIT=1 docker build \
-            --build-arg "BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-            -t "$IMAGE:$TAG" -t "$IMAGE:latest" .
+          docker buildx build \
+            --platform "${{ matrix.platform }}" \
+            --build-arg "BUILD_DATE=${{ needs.prep.outputs.build_date }}" \
+            --output "type=image,name=$IMAGE,push-by-digest=true,name-canonical=true,push=true" \
+            --metadata-file /tmp/meta.json .
+          mkdir -p /tmp/digests
+          jq -r '."containerimage.digest"' /tmp/meta.json > "/tmp/digests/${{ matrix.arch }}"
+          cat "/tmp/digests/${{ matrix.arch }}"
 
-      - name: Push
+      - uses: actions/upload-artifact@v4
+        with:
+          name: digest-${{ matrix.arch }}
+          path: /tmp/digests/${{ matrix.arch }}
+          retention-days: 1
+
+  publish:
+    needs: [prep, build]
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+    env:
+      TAG: ${{ needs.prep.outputs.tag }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: digest-*
+          path: /tmp/digests
+          merge-multiple: true
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Before any tag moves: the graded (amd64) image must carry the ccache pre-fill helper.
+      - name: Check the amd64 image has the ccache prefill
         run: |
-          docker push "$IMAGE:$TAG"
-          docker push "$IMAGE:latest"
-          docker inspect --format '{{index .RepoDigests 0}}' "$IMAGE:$TAG" || true
+          docker run --rm --entrypoint sh "$IMAGE@$(cat /tmp/digests/amd64)" \
+            -c 'test -x /opt/mayhem/ccache/prefill && /opt/mayhem/ccache/ccache --version | head -1'
+
+      - name: Tag the multi-arch index
+        run: |
+          docker buildx imagetools create -t "$IMAGE:$TAG" -t "$IMAGE:latest" \
+            "$IMAGE@$(cat /tmp/digests/amd64)" "$IMAGE@$(cat /tmp/digests/arm64)"
+          docker buildx imagetools inspect "$IMAGE:$TAG"
