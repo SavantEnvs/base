@@ -22,6 +22,10 @@ on:
         description: 'tag to publish (default: today UTC, YYYYMMDD)'
         type: string
         default: ''
+      no_cache:
+        description: 'rebuild every layer (picks up current Debian packages; default reuses the Test cache)'
+        type: boolean
+        default: false
 
 env:
   IMAGE: ghcr.io/savantenvs/base
@@ -67,15 +71,32 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # Layer cache, never evicted (unlike the Actions cache's 7-day/10 GB limits):
+      #  - buildcache-<arch>: registry cache of every stage (mode=max, incl. ccache-builder);
+      #  - inline: cache metadata embedded in the published image, so :latest itself is a cache
+      #    source and an unchanged layer is reused byte-for-byte across mints (cheaper fork pulls).
+      # A cached apt layer only refreshes when the Dockerfile changes above it; dispatch with
+      # no_cache for a fresh base.
       - name: Build ./Dockerfile and push by digest (${{ matrix.platform }})
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: ${{ matrix.platform }}
+          build-args: BUILD_DATE=${{ needs.prep.outputs.build_date }}
+          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          no-cache: ${{ inputs.no_cache }}
+          cache-from: |
+            type=registry,ref=${{ env.IMAGE }}:buildcache-${{ matrix.arch }}
+            type=registry,ref=${{ env.IMAGE }}:latest
+          cache-to: |
+            type=registry,ref=${{ env.IMAGE }}:buildcache-${{ matrix.arch }},mode=max
+            type=inline
+
+      - name: Record the digest
         run: |
-          docker buildx build \
-            --platform "${{ matrix.platform }}" \
-            --build-arg "BUILD_DATE=${{ needs.prep.outputs.build_date }}" \
-            --output "type=image,name=$IMAGE,push-by-digest=true,name-canonical=true,push=true" \
-            --metadata-file /tmp/meta.json .
           mkdir -p /tmp/digests
-          jq -r '."containerimage.digest"' /tmp/meta.json > "/tmp/digests/${{ matrix.arch }}"
+          echo "${{ steps.build.outputs.digest }}" > "/tmp/digests/${{ matrix.arch }}"
           cat "/tmp/digests/${{ matrix.arch }}"
 
       - uses: actions/upload-artifact@v4
@@ -92,6 +113,8 @@ jobs:
     env:
       TAG: ${{ needs.prep.outputs.tag }}
     steps:
+      - uses: actions/checkout@v4
+
       - uses: actions/download-artifact@v4
         with:
           pattern: digest-*
@@ -107,11 +130,10 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # Before any tag moves: the graded (amd64) image must carry the ccache pre-fill helper.
-      - name: Check the amd64 image has the ccache prefill
-        run: |
-          docker run --rm --entrypoint sh "$IMAGE@$(cat /tmp/digests/amd64)" \
-            -c 'test -x /opt/mayhem/ccache/prefill && /opt/mayhem/ccache/ccache --version | head -1'
+      # Before any tag moves: the exact amd64 image being published (the graded platform) must pass
+      # the same smoke test as the Test workflow.
+      - name: Smoke-test the amd64 image
+        run: docker run --rm -i "$IMAGE@$(cat /tmp/digests/amd64)" bash -s < test/smoke.sh
 
       - name: Tag the multi-arch index
         run: |

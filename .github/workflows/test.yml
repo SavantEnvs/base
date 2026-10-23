@@ -1,5 +1,6 @@
 # Test the base image: lint, then build ./Dockerfile natively per platform and run test/smoke.sh
-# inside it. Nothing is pushed. Runs on every PR and after every push to main.
+# inside it. Nothing is pushed to a registry (layers go to the Actions cache). Runs on every PR
+# and after every push to main.
 name: Test
 
 on:
@@ -31,15 +32,31 @@ jobs:
       matrix:
         include:
           - platform: linux/amd64
+            arch: amd64
             runner: ubuntu-latest
           - platform: linux/arm64
+            arch: arm64
             runner: ubuntu-24.04-arm
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
 
+      - uses: docker/setup-buildx-action@v3
+
+      # Own per-platform Actions cache, plus read-only use of Publish's caches (public): its
+      # buildcache-<arch> and the inline cache in :latest, so a PR build starts from the last mint.
       - name: Build ./Dockerfile (${{ matrix.platform }})
-        run: DOCKER_BUILDKIT=1 docker build --platform "${{ matrix.platform }}" -t base-test .
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: ${{ matrix.platform }}
+          tags: base-test
+          load: true
+          cache-from: |
+            type=gha,scope=test-${{ matrix.arch }}
+            type=registry,ref=ghcr.io/savantenvs/base:buildcache-${{ matrix.arch }}
+            type=registry,ref=ghcr.io/savantenvs/base:latest
+          cache-to: type=gha,scope=test-${{ matrix.arch }},mode=max
 
       - name: Smoke test
         run: docker run --rm -i base-test bash -s < test/smoke.sh
