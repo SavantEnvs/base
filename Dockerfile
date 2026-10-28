@@ -89,7 +89,7 @@ RUN apt-get update && apt-get install -yq --no-install-recommends \
       libc6-dbg gdb strace ltrace less \
       make cmake ninja-build pkg-config \
       autoconf automake libtool m4 bison flex gettext autopoint \
-      python3 python3-pip python-is-python3 \
+      python3 python3-pip python-is-python3 python3-yaml \
       binutils file patch patchelf xz-utils zip unzip \
       vim \
       wget curl \
@@ -127,7 +127,7 @@ RUN groupadd -g 10000 sandbox && useradd -u 10000 -g 10000 -M -s /usr/sbin/nolog
 # image opts in by wrapping ONLY its build step in `/opt/mayhem/ccache/prefill <cmd…>`. The helper is
 # the single source of truth for the pinned settings and the stamp rlenv validates at setup.
 COPY --from=ccache-builder /out/ccache /opt/mayhem/ccache/ccache
-COPY --chmod=755 ccache-prefill.sh /opt/mayhem/ccache/prefill
+COPY --chmod=755 lib/ccache-prefill.sh /opt/mayhem/ccache/prefill
 # The masquerade dir is persistent and root-owned: CMake records the resolved compiler path in
 # CMakeCache.txt, so it must still exist when the grader rebuilds (SPEC §6.2 item 18). It is NOT on
 # PATH; only the helper prepends it. Only compilers present here are wrapped; afl-*/hfuzz-* never.
@@ -136,6 +136,11 @@ RUN mkdir -p /opt/mayhem/ccache/bin \
       if command -v "$n" >/dev/null 2>&1; then ln -s /opt/mayhem/ccache/ccache "/opt/mayhem/ccache/bin/$n"; fi; \
     done \
  && mkdir -p /opt/toolchains/ccache && chown 2000:2000 /opt/toolchains/ccache && chmod 0700 /opt/toolchains/ccache
+
+# rlenv-image: rlenv's tools for inspecting a built image. CI runs `rlenv-image labels` in each commit
+# image it builds and adds the labels it prints. Off PATH, like the ccache helper. Needs python3-yaml
+# (above).
+COPY --chmod=755 lib/rlenv-image.py /opt/mayhem/bin/rlenv-image
 
 # Provenance — record EXACTLY when this base was built. Docker's own image `.Created`
 # field is (a) not a label and (b) overwritten to SOURCE_DATE_EPOCH on a time-travel
