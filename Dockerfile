@@ -89,7 +89,7 @@ RUN apt-get update && apt-get install -yq --no-install-recommends \
       libc6-dbg gdb strace ltrace less \
       make cmake ninja-build pkg-config \
       autoconf automake libtool m4 bison flex gettext autopoint \
-      python3 python3-pip python-is-python3 \
+      python3 python3-pip python-is-python3 python3-yaml \
       binutils file patch patchelf xz-utils zip unzip \
       vim \
       wget curl \
@@ -136,6 +136,10 @@ RUN mkdir -p /opt/mayhem/ccache/bin \
       if command -v "$n" >/dev/null 2>&1; then ln -s /opt/mayhem/ccache/ccache "/opt/mayhem/ccache/bin/$n"; fi; \
     done \
  && mkdir -p /opt/toolchains/ccache && chown 2000:2000 /opt/toolchains/ccache && chmod 0700 /opt/toolchains/ccache
+
+# rlenv-build-identity prints the image's rlenv.build.identity label value; CI runs it in each commit image it
+# builds. Off PATH, like the ccache helper. Needs python3-yaml (above).
+COPY --chmod=755 lib/rlenv-build-identity.py /opt/mayhem/bin/rlenv-build-identity
 
 # Provenance — record EXACTLY when this base was built. Docker's own image `.Created`
 # field is (a) not a label and (b) overwritten to SOURCE_DATE_EPOCH on a time-travel
