@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Smoke test for the base image. Run INSIDE it:  docker run --rm -i <image> bash -s < test/smoke.sh
 # Checks the contract commit images rely on: non-root user, libFuzzer + ASan/UBSan link and run,
-# the standalone driver, the ccache pre-fill helper (SPEC §6.2 item 18), and rlenv-build-identity.
+# the standalone driver, the ccache pre-fill helper (SPEC §6.2 item 18), and rlenv-image (build-identity, labels).
 set -euo pipefail
 cd "$(mktemp -d)"
 
@@ -29,7 +29,7 @@ case ":$PATH:" in *ccache*) echo "ccache must not be on the image PATH" >&2; exi
 grep -qE 'Hits: +1 / +2' stats || { echo "expected 1 cache hit on the second compile" >&2; exit 1; }
 printf 'version=4.11.3\nCCACHE_COMMENTS=1\nCCACHE_NODIRECT=1\n' | diff - /opt/toolchains/ccache/rlenv-ccache.stamp
 
-echo "== rlenv-build-identity"
+echo "== rlenv-image build-identity"
 # The primary harness (the instrumented cmd, not the first) links a non-system .so via RUNPATH, so the
 # identity covers harness + ELF interpreter + that .so. Check it against a digest computed here.
 mkdir -p repo/mayhem repo/lib
@@ -46,14 +46,19 @@ cmds:
     cwd: $PWD/repo
     libfuzzer: true
 YAML
-/opt/mayhem/bin/rlenv-build-identity repo > out
+/opt/mayhem/bin/rlenv-image build-identity repo > out
 interp=$(readlink -f "$(readelf -l repo/fuzz | sed -n 's/.*interpreter: \(.*\)]/\1/p')")
 want=$(sha256sum repo/fuzz repo/lib/libbar.so "$interp" | cut -d' ' -f1 | LC_ALL=C sort |
   awk 'NR > 1 {printf "\n"} {printf "%s", $0}' | sha256sum | cut -d' ' -f1)
 printf '%s\nsha256:%s\n' "$PWD/repo/fuzz" "$want" | diff - out
+echo "== rlenv-image labels"
+/opt/mayhem/bin/rlenv-image labels repo > out
+printf 'rlenv.build.identity=sha256:%s\nrlenv.build.executable=%s\n' "$want" "$PWD/repo/fuzz" | diff - out
 # An unresolved library: exit 1 and nothing on stdout.
 rm repo/lib/libbar.so
-if /opt/mayhem/bin/rlenv-build-identity repo > out 2>/dev/null; then echo "expected exit 1 on a missing .so" >&2; exit 1; fi
+if /opt/mayhem/bin/rlenv-image build-identity repo > out 2>/dev/null; then echo "expected exit 1 on a missing .so" >&2; exit 1; fi
 [ ! -s out ] || { echo "expected no stdout on a missing .so" >&2; exit 1; }
+if /opt/mayhem/bin/rlenv-image labels repo > out 2>/dev/null; then echo "labels: expected exit 1 on a missing .so" >&2; exit 1; fi
+[ ! -s out ] || { echo "labels: expected no identity labels on a missing .so" >&2; exit 1; }
 
 echo "OK"

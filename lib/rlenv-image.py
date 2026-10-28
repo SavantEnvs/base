@@ -1,21 +1,8 @@
 #!/usr/bin/python3 -I
 """
-Prints the primary harness's path and its build identity (rlenv.build.identity).
+rlenv-image — rlenv's tools for inspecting this image. Installed as /opt/mayhem/bin/rlenv-image; run it
+in a built image:  docker run --rm --entrypoint /opt/mayhem/bin/rlenv-image IMAGE <command> ...
 
-Installed as /opt/mayhem/bin/rlenv-build-identity. Run it in a built image:
-  docker run --rm --entrypoint /opt/mayhem/bin/rlenv-build-identity IMAGE
-REPO is the checkout in the image (default /mayhem).
-
-The primary harness: the first instrumented cmd (`libfuzzer`, `afl` or `honggfuzz` true) of the first
-REPO/mayhem/Mayhemfile* in byte order, else that file's first cmd. Its argv[0] is resolved the way the
-cmd would resolve it (its cwd, then PATH), with the cmd's own `env:` LD_LIBRARY_PATH and PATH applied.
-
-The identity is sha256 over the contents (not paths) of the harness, its ELF interpreter and the
-non-system shared libraries the loader resolves for it (`ldd`; those under /lib and /usr/lib don't
-count). For a #! script: the script plus its interpreter's closure. It follows rlenv's reference
-script step for step; any difference shows up as a mismatch with rlenv's own computation.
-
-Exit 0: two lines on stdout (path, sha256:<hex>). Exit 1: nothing on stdout, the reason on stderr.
 Absolute python3 and -I: the image's own PATH and PYTHONPATH mustn't pick the interpreter or its modules.
 """
 import argparse
@@ -149,21 +136,76 @@ def measure(repo):
         raise NotMeasured(str(e))
 
 
-def main(argv):
-    ap = argparse.ArgumentParser(prog="rlenv-build-identity", description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("repo", nargs="?", default="/mayhem", help="the checkout in the image (default: %(default)s)")
-    args = ap.parse_args(argv)
+BUILD_IDENTITY = """\
+Prints the primary harness's path and its build identity (rlenv.build.identity).
+REPO is the checkout in the image (default /mayhem).
+
+The primary harness: the first instrumented cmd (`libfuzzer`, `afl` or `honggfuzz` true) of the first
+REPO/mayhem/Mayhemfile* in byte order, else that file's first cmd. Its argv[0] is resolved the way the
+cmd would resolve it (its cwd, then PATH), with the cmd's own `env:` LD_LIBRARY_PATH and PATH applied.
+
+The identity is sha256 over the contents (not paths) of the harness, its ELF interpreter and the
+non-system shared libraries the loader resolves for it (`ldd`; those under /lib and /usr/lib don't
+count). For a #! script: the script plus its interpreter's closure. It follows rlenv's reference
+script step for step; any difference shows up as a mismatch with rlenv's own computation.
+
+Exit 0: two lines on stdout (path, sha256:<hex>). Exit 1: nothing on stdout, the reason on stderr.
+"""
+
+
+def build_identity(args):
     try:
         sel, exe, ident = measure(os.path.abspath(args.repo))
     except NotMeasured as e:
-        print(f"rlenv-build-identity: {e}", file=sys.stderr)
+        print(f"rlenv-image build-identity: {e}", file=sys.stderr)
         return 1
-    print(f"rlenv-build-identity: primary harness {sel['argv0']} of {sel['mayhemfile']}", file=sys.stderr)
+    print(f"rlenv-image build-identity: primary harness {sel['argv0']} of {sel['mayhemfile']}", file=sys.stderr)
     print(exe)
     print(ident)
     return 0
 
+
+LABELS = """\
+Prints the labels CI adds to the image after building it, one `key=value` per line (pass each to
+`docker build --label`): rlenv.build.identity and rlenv.build.executable (see `build-identity`).
+REPO is the checkout in the image (default /mayhem).
+
+Exit 0: every label. Exit 1: some couldn't be computed; stdout still has the rest (add those), the
+reason is on stderr. A new base can add labels without any change to CI.
+"""
+
+
+def labels(args):
+    out, ok = [], True
+    try:
+        _, exe, ident = measure(os.path.abspath(args.repo))
+        out += [("rlenv.build.identity", ident), ("rlenv.build.executable", exe)]
+    except NotMeasured as e:
+        print(f"rlenv-image labels: no rlenv.build.identity: {e}", file=sys.stderr)
+        ok = False
+    for k, v in out:
+        if "\n" in v:  # one label per line
+            print(f"rlenv-image labels: {k}: value has a newline, skipped", file=sys.stderr)
+            ok = False
+            continue
+        print(f"{k}={v}")
+    return 0 if ok else 1
+
+
+def main(argv):
+    ap = argparse.ArgumentParser(prog="rlenv-image", description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = ap.add_subparsers(dest="command", required=True, metavar="<command>")
+    bi = sub.add_parser("build-identity", help="the primary harness and its rlenv.build.identity",
+                        description=BUILD_IDENTITY, formatter_class=argparse.RawDescriptionHelpFormatter)
+    bi.add_argument("repo", nargs="?", default="/mayhem", help="the checkout in the image (default: %(default)s)")
+    bi.set_defaults(run=build_identity)
+    lb = sub.add_parser("labels", help="the labels CI adds to the image, as key=value lines",
+                        description=LABELS, formatter_class=argparse.RawDescriptionHelpFormatter)
+    lb.add_argument("repo", nargs="?", default="/mayhem", help="the checkout in the image (default: %(default)s)")
+    lb.set_defaults(run=labels)
+    args = ap.parse_args(argv)
+    return args.run(args)
 
 if __name__ == "__main__":
     sys.exit(main(sys.argv[1:]))

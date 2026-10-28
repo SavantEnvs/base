@@ -1,7 +1,7 @@
 # ghcr.io/savantenvs/base
 
 The C/C++ base image that every savantenvs commit image builds `FROM`: Debian, clang and libFuzzer, the
-non-root users, and the helpers under `/opt/mayhem` (ccache pre-fill, `rlenv-build-identity`). See the
+non-root users, and the helpers under `/opt/mayhem` (ccache pre-fill, `rlenv-image`). See the
 `Dockerfile` header.
 
 - **Test** (`.github/workflows/test.yml`): runs on every PR. It lints, builds both platforms, and runs

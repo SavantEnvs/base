@@ -137,9 +137,10 @@ RUN mkdir -p /opt/mayhem/ccache/bin \
     done \
  && mkdir -p /opt/toolchains/ccache && chown 2000:2000 /opt/toolchains/ccache && chmod 0700 /opt/toolchains/ccache
 
-# rlenv-build-identity prints the image's rlenv.build.identity label value; CI runs it in each commit image it
-# builds. Off PATH, like the ccache helper. Needs python3-yaml (above).
-COPY --chmod=755 lib/rlenv-build-identity.py /opt/mayhem/bin/rlenv-build-identity
+# rlenv-image: rlenv's tools for inspecting a built image. CI runs `rlenv-image labels` in each commit
+# image it builds and adds the labels it prints. Off PATH, like the ccache helper. Needs python3-yaml
+# (above).
+COPY --chmod=755 lib/rlenv-image.py /opt/mayhem/bin/rlenv-image
 
 # Provenance — record EXACTLY when this base was built. Docker's own image `.Created`
 # field is (a) not a label and (b) overwritten to SOURCE_DATE_EPOCH on a time-travel
