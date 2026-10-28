@@ -127,7 +127,7 @@ RUN groupadd -g 10000 sandbox && useradd -u 10000 -g 10000 -M -s /usr/sbin/nolog
 # image opts in by wrapping ONLY its build step in `/opt/mayhem/ccache/prefill <cmd…>`. The helper is
 # the single source of truth for the pinned settings and the stamp rlenv validates at setup.
 COPY --from=ccache-builder /out/ccache /opt/mayhem/ccache/ccache
-COPY --chmod=755 ccache-prefill.sh /opt/mayhem/ccache/prefill
+COPY --chmod=755 lib/ccache-prefill.sh /opt/mayhem/ccache/prefill
 # The masquerade dir is persistent and root-owned: CMake records the resolved compiler path in
 # CMakeCache.txt, so it must still exist when the grader rebuilds (SPEC §6.2 item 18). It is NOT on
 # PATH; only the helper prepends it. Only compilers present here are wrapped; afl-*/hfuzz-* never.

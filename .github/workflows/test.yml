@@ -21,7 +21,7 @@ jobs:
         run: docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint:1.7.7 -color
 
       - name: shellcheck
-        run: shellcheck -S warning ccache-prefill.sh build-and-push.sh test/smoke.sh
+        run: shellcheck -S warning lib/ccache-prefill.sh build-and-push.sh test/smoke.sh
 
       - name: hadolint
         run: docker run --rm -i hadolint/hadolint:v2.12.0 hadolint --failure-threshold error - < Dockerfile
